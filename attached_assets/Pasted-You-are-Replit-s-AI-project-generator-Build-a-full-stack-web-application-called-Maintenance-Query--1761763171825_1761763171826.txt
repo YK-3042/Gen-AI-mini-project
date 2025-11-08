@@ -1,0 +1,324 @@
+You are Replit’s AI project generator. Build a full-stack web application called “Maintenance Query Agent” using React (frontend) and FastAPI (backend) that runs entirely within Replit hosting. Follow the specifications below exactly and prioritize reliability, light-weight behaviour, and built-in verification — the generator must run a short startup test suite and not stop until the basic endpoints are confirmed working.
+
+High-level goals
+
+Lightweight, crash-resistant UI and backend so the app runs reliably in Replit.
+
+Admin panel with verifiable login and an option to safely change credentials.
+
+Document ingestion (admin uploads) and FAISS-based retrieval for best answers.
+
+Fallback behaviour: the interface must answer basic maintenance questions using Gemini even if no documents are uploaded.
+
+Build, run and verify basic endpoints (/health, /chat, /admin/login) automatically before finishing generation.
+
+Tech stack & constraints
+
+Frontend: React + Vite (keep dependencies minimal — avoid heavy UI libraries; use plain CSS or small utility classes). Do not include unnecessary third-party UI libs that increase load/crash risk. Tailwind is optional — prefer vanilla CSS for smallest bundle, but Replit may include tailwind only if explicitly requested.
+
+Backend: FastAPI (Python 3.11).
+
+Vector DB: FAISS (faiss-cpu) stored locally in /backend/embeddings.
+
+DB: SQLite for metadata and history.
+
+Embeddings & LLM: Gemini-1.5-flash for generation and models/embedding-001 for embeddings via Google Generative API.
+
+Storage: local Replit storage (e.g. /backend/data).
+
+Secrets: use Replit secrets (environment variables). Do not hard-code keys. The project should read GEMINI_API_KEY from os.environ.
+
+Keep the app lightweight: minimize dependencies, lazy-load heavy modules (e.g., load FAISS only when /upload or retrieval is called), use pagination for history, and avoid large bundle generation in dev mode.
+
+Environment setup (instructions for the generator)
+
+Create a .env.example and read environment variables from the Replit Secrets panel, specifically:
+
+GEMINI_API_KEY (required)
+
+Optional override: ADMIN_USER and ADMIN_PASS (if provided, initialize admin creds with these, else create default but require change on first login)
+
+Use requirements.txt containing only required Python packages (fastapi, uvicorn, pydantic, faiss-cpu, python-docx, PyPDF2 or pypdf, bcrypt, aiofiles, sqlite3 is builtin, requests or google-generativeai if preferred) and package.json with minimal frontend deps (react, react-dom, axios, vite).
+
+Project Structure (create exactly)
+/frontend
+  package.json
+  vite.config.js
+  src/
+    main.jsx
+    App.jsx
+    pages/
+      ChatPage.jsx
+      AdminPage.jsx
+    components/
+      ChatBox.jsx
+      HistoryPanel.jsx
+      SourcePanel.jsx
+      LoginForm.jsx
+      ErrorBoundary.jsx
+    styles/
+      global.css
+/backend
+  main.py
+  auth.py
+  embeddings.py
+  db.py
+  utils.py
+  startup_check.py
+  /data        # uploaded manuals stored here
+  /embeddings  # faiss index + vector metadata here
+  db.sqlite
+README.md
+
+Frontend details (must implement)
+
+General:
+
+Dark minimalist design titled Maintenance Query Agent.
+
+Avoid heavy runtime JS. Keep bundles small. Use code-splitting/lazy for AdminPage.
+
+Add ErrorBoundary component to catch runtime errors (so the page doesn't white-screen; show user-friendly error and retry button).
+
+Safe checks for arrays and nulls (no direct history.map without a guard).
+
+Layout:
+
+Left: HistoryPanel — shows recent queries (server returns array). Click to reload a query.
+
+Center: ChatBox — messages, send input at bottom, disabled with spinner while waiting for response.
+
+Right: SourcePanel — shows up to 3 source excerpts with document name and confidence/score.
+
+Behavior:
+
+On initial load, GET /health — show a small status indicator. If /health fails, display a clear message and provide a “Retry health check” button.
+
+If history or sources fetch fails, show safe default messages (e.g., "No history" or "No manuals uploaded").
+
+Chat sends POST /chat with { query }. While waiting show a non-blocking spinner.
+
+Admin Page:
+
+Route /admin (lazy-loaded).
+
+Login form (username, password) calling POST /admin/login.
+
+After login, show upload UI accepting .pdf, .docx, .txt.
+
+Show list of uploaded documents and processing status.
+
+Show a Change password form (requires current password + new password + confirm), calling POST /admin/change-password.
+
+Include a logout button and session kept in browser memory (not localStorage) to reduce risk.
+
+Vite config:
+
+Add server.allowedHosts: ['localhost', '127.0.0.1'] and include a flexible host allowance for Replit hostnames. Accept wildcard-like behavior: server: { host: true, port: 5173, allowedHosts: 'auto' } or programmatically append the current origin at runtime into allowed hosts. (Make sure the generated vite.config.js will allow Replit preview hosts.)
+
+Robustness:
+
+Wrap all fetch/axios responses with try/catch and handle non-200 statuses gracefully.
+
+Ensure HistoryPanel checks Array.isArray(history) before mapping.
+
+Accessibility: simple aria-labels.
+
+Backend details (must implement)
+
+API endpoints and behaviour:
+
+1. GET /health
+
+Return JSON with keys:
+
+{
+  "ok": true,
+  "db": "ok",
+  "faiss": "ok_or_unloaded",
+  "embeddings_count": number,
+  "checked_at": "ISO timestamp"
+}
+
+
+This endpoint must not initialize FAISS fully if not needed — if FAISS index files exist, check they can be loaded; if not present, report faiss: "not_ready".
+
+The generator must run a programmatic check hitting this endpoint before finishing.
+
+2. POST /admin/login
+
+Input JSON: { "username": "...", "password": "..." }
+
+Use secure password hashing (bcrypt) and store admin user in SQLite table admin with columns username, password_hash, created_at.
+
+Default behavior:
+
+On first run, create an admin entry using either environment vars ADMIN_USER/ADMIN_PASS (if provided) or with a default user yksw2403 with a strong generated password printed in the server log and marked as "must change at first login". But do not print Gemini API or secrets in logs.
+
+Always store password as a bcrypt hash.
+
+On successful login, return a short-lived server-side session token (in-memory session store) or JWT with short expiry. For simplicity and reliability in Replit, implement a signed JWT with a secret from env JWT_SECRET (generate if missing). Make cookie optional; return token in JSON and frontend store it in memory only.
+
+Login verification requirement: The generator must perform an automated test POST to /admin/login with the configured credentials (environment variable ADMIN_USER/ADMIN_PASS if present, otherwise test default yksw2403/240305) and if login fails, the generator should retry and raise an explicit error with detailed debug output. In production the generator must ensure login works before finalizing the build.
+
+3. POST /admin/upload
+
+Protected: requires admin auth token.
+
+Accepts file upload (multipart/form-data), validates file type (.pdf, .docx, .txt) and sanitizes filename.
+
+Processing:
+
+Extract text (use python-docx for .docx, PyPDF2 / pypdf for .pdf, simple read for .txt).
+
+Split into chunks (configurable chunk size ~500 tokens or ~800 characters with overlap).
+
+Generate embeddings using Gemini Embedding API (models/embedding-001) — but lazy load the embedding client (only load when first upload occurs).
+
+Add vectors and metadata (doc name, chunk id, snippet) to FAISS and save index to /backend/embeddings.
+
+Add a row in documents table: id, filename, uploaded_at, status.
+
+Return status JSON with processed chunk count and brief summary.
+
+4. POST /chat
+
+Input: { "query": "..." }
+
+Behavior:
+
+If FAISS index exists and has vectors, embed the query and retrieve top-3 similar chunks and their metadata.
+
+Construct the prompt:
+
+System: You are an expert in manufacturing equipment maintenance.
+Instructions: Answer the user query using ONLY the provided document excerpts. Include citations (document names) in parentheses after claims. If insufficient information, say you don't have enough information.
+Context: <top 3 excerpts here, each labeled with filename & snippet>
+User: <user query>
+
+
+If FAISS is not ready or there are no documents, instead call Gemini directly with a safe default system prompt to answer basic maintenance queries (e.g., lubrication intervals, basic safety checks) — i.e., provide useful but general responses. Still mark response as source: "general_knowledge" or similar.
+
+Save query and response to SQLite history table (fields: id, query, response, sources_json, created_at).
+
+Return:
+
+{ "answer": "...", "sources": [{ "doc": "name", "excerpt": "..." }], "used_documents": boolean }
+
+5. GET /history
+
+Return the last N history rows as a JSON array. Ensure it returns an array even if empty: [].
+
+Use pagination param ?limit=20.
+
+6. GET /sources
+
+Return list of uploaded docs and metadata: [{filename, uploaded_at, status, chunks_count}].
+
+7. POST /admin/change-password
+
+Protected: requires admin auth + current password verification.
+
+Input: { "current_password": "...", "new_password": "..." }.
+
+Verify current password (bcrypt). If valid, update password_hash. Return success message.
+
+Enforce safe password min length 8. Log attempt counts and return safe message on failures.
+
+Security & CORS:
+
+Enable CORS for the frontend origin(s), adapt dynamically to Replit runtime host. Allow window.location.origin or accept broad * only in dev/test; prefer limiting allowed origins to the Replit preview host.
+
+Sanitize filenames and limit max upload size (e.g., 10MB per file).
+
+Do not log sensitive data.
+
+Embeddings & FAISS specifics
+
+Use Gemini embedding endpoint models/embedding-001 (or local fallback mock for dev if key missing).
+
+Save both FAISS index and a companion SQLite table mapping vector ids to metadata: doc, chunk_id, text_snippet.
+
+Implement a function to rebuild index from saved metadata if index files missing.
+
+Startup and self-check (very important)
+
+After scaffolding and starting both servers (frontend & backend), the generator must execute an automated startup check script (backend/startup_check.py) that performs the following programmatic checks:
+
+GET /health — expect ok=true. If faiss not ready, that's acceptable but must be reported.
+
+POST /admin/login — attempt login using env credentials (if provided) or default yksw2403/240305 — expect success. If fails:
+
+Retry once.
+
+If still fails, print detailed debug info (e.g., DB admin table contents hashed username present?) and fail the generation with a clear message instructing user to set ADMIN_USER/ADMIN_PASS secrets or fix credentials.
+
+POST /chat — send a short sample query like "What is a recommended lubrication interval for conveyor belts?" and expect a 200 OK and an answer field. This tests Gemini connectivity or fallback general-knowledge answer.
+
+If Gemini key missing, this call should still return a general-knowledge answer using a local fallback prompt and mark source: "general_knowledge".
+
+If all checks pass, print a friendly message: "Startup checks passed — project generated and verified." and include next steps (add GEMINI_API_KEY to secrets if not present).
+
+Important: The generator must not stop or mark generation complete until these checks either succeed or fail with clear instructions. If any critical tests fail (login or chat), generation should fail loudly with actionable debugging steps.
+
+Error handling, logging & robustness
+
+Backend: return structured JSON errors with non-sensitive messages and appropriate HTTP codes.
+
+Frontend: use ErrorBoundary to catch UI errors and show a friendly message + “retry” and “report” option.
+
+Keep console logs minimal; never print secrets or sensitive tokens.
+
+Provide informative status messages for admin uploads (queued → processing → done/error).
+
+Add instructions in README.md describing how to add GEMINI_API_KEY in Replit secrets, how to start backend/frontend, and how to change admin password via the Admin UI or environment variable override.
+
+Testing & instructions (in README)
+
+How to add secrets in Replit (GEMINI_API_KEY, optional ADMIN_USER, ADMIN_PASS).
+
+Start backend: cd backend && uvicorn main:app --host 0.0.0.0 --port 8000.
+
+Start frontend: cd frontend && npm run dev.
+
+How to run the automated startup check manually: python backend/startup_check.py.
+
+How to upload test docs and how to query.
+
+Dependencies (minimal list)
+
+Python (requirements.txt):
+
+fastapi
+uvicorn
+pydantic
+faiss-cpu
+python-docx
+pypdf
+bcrypt
+aiofiles
+requests
+
+
+Frontend (package.json):
+
+react
+react-dom
+axios
+vite
+
+Summary of added robustness requests (explicit to generator)
+
+Make UI and backend lightweight — avoid heavy, unnecessary packages; lazy-load FAISS and embedding clients.
+
+Add an automated startup test that verifies /health, /admin/login, and /chat before marking generation complete.
+
+Fix admin login reliability — use bcrypt hashed passwords, test login at generation time, and include a Change Password endpoint in Admin UI.
+
+Provide fallback answering: POST /chat must return useful general maintenance answers using Gemini or a fallback prompt when documents are not uploaded.
+
+Add error boundaries, safe guards for mapping arrays (e.g., Array.isArray(history)), and robust CORS/vite host handling so preview doesn’t white-screen.
+
+Save instruction in README on how to change admin credentials via UI or secrets and how to run the server locally on Replit.
+
+Generate the full working codebase and include backend/startup_check.py which runs the checks against the running server and prints a clear success/failure report. Make the app ready to run inside Replit: both frontend and backend processes should be startable from the Replit UI. If any check fails, the generation process should fail with actionable debugging instructions.
